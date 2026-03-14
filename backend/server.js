@@ -16,7 +16,7 @@ const io = new Server(server, {
   cors: { origin: "*" },
 });
 
-// Generate interview questions
+// Generate interview questions 
 app.post("/api/questions", async (req, res) => {
   const { type = "software engineering", count = 5, jobDescription = "" } = req.body;
 
@@ -90,6 +90,7 @@ app.post("/api/analyze", async (req, res) => {
   }
 });
 
+
 // WebSocket connection handler
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
@@ -113,9 +114,9 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Placeholder for voice data (extend as needed)
+  // Placeholder for voice data 
   socket.on("voice-data", (audioChunk) => {
-    // Process audio (e.g., transcribe with Whisper)
+    // Process audio 
     // Emit back transcription or feedback
     socket.emit("voice-feedback", { transcript: "Transcribed text" });
   });
