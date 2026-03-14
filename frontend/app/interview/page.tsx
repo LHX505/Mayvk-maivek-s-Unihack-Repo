@@ -41,6 +41,8 @@ function InterviewContent() {
   const type = searchParams.get("type") || "software-engineering";
   const typeLabel = type.replace(/-/g, " ");
 
+  const [jobDescription, setJobDescription] = useState("");
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -77,13 +79,25 @@ function InterviewContent() {
     }
   }, []);
 
+  // Read job description from sessionStorage on mount
+  useEffect(() => {
+    const jd = sessionStorage.getItem("jobDescription") || "";
+    setJobDescription(jd);
+  }, []);
+
   // Fetch questions from backend
   const fetchQuestions = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(
-        `${API_URL}/api/questions?type=${encodeURIComponent(typeLabel)}&count=5`
-      );
+      const res = await fetch(`${API_URL}/api/questions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: typeLabel,
+          count: 5,
+          jobDescription,
+        }),
+      });
       const data = await res.json();
       setQuestions(data.questions);
     } catch {
@@ -97,7 +111,7 @@ function InterviewContent() {
       ]);
     }
     setLoading(false);
-  }, [typeLabel]);
+  }, [typeLabel, jobDescription]);
 
   // Start interview
   const handleStartInterview = async () => {
@@ -222,6 +236,13 @@ function InterviewContent() {
       router.push("/");
     }
   };
+
+  // Attach stream to video element when interview screen renders
+  useEffect(() => {
+    if (step === "interview" && streamRef.current && videoRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+    }
+  }, [step]);
 
   // Cleanup on unmount
   useEffect(() => {

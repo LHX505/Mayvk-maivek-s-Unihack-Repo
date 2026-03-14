@@ -33,9 +33,16 @@ const interviewTypes = [
 export default function Home() {
   const router = useRouter();
   const [selected, setSelected] = useState<string | null>(null);
+  const [jobDescription, setJobDescription] = useState("");
 
   const handleStart = () => {
     if (selected) {
+      // Store job description in sessionStorage so interview page can read it
+      if (jobDescription.trim()) {
+        sessionStorage.setItem("jobDescription", jobDescription.trim());
+      } else {
+        sessionStorage.removeItem("jobDescription");
+      }
       router.push(`/interview?type=${selected}`);
     }
   };
@@ -67,6 +74,20 @@ export default function Home() {
               <p className="text-sm text-gray-400">{type.description}</p>
             </button>
           ))}
+        </div>
+
+        {/* Job Description */}
+        <div className="mb-10 text-left">
+          <label className="block text-sm font-medium text-gray-300 mb-2">
+            Paste a job description (optional)
+          </label>
+          <textarea
+            value={jobDescription}
+            onChange={(e) => setJobDescription(e.target.value)}
+            placeholder="Paste the job description here for tailored interview questions..."
+            rows={4}
+            className="w-full bg-gray-800/50 border border-gray-700 rounded-xl p-4 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 resize-none"
+          />
         </div>
 
         <button

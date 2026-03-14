@@ -10,8 +10,12 @@ app.use(express.json());
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Generate interview questions
-app.get("/api/questions", async (req, res) => {
-  const { type = "software engineering", count = 5 } = req.query;
+app.post("/api/questions", async (req, res) => {
+  const { type = "software engineering", count = 5, jobDescription = "" } = req.body;
+
+  const jdContext = jobDescription
+    ? `\n\nThe candidate is applying for a role with this job description:\n"""${jobDescription}"""\n\nTailor the questions to this specific role and its requirements.`
+    : "";
 
   try {
     const response = await openai.chat.completions.create({
@@ -19,7 +23,7 @@ app.get("/api/questions", async (req, res) => {
       messages: [
         {
           role: "system",
-          content: `You are an expert interviewer. Generate ${count} realistic interview questions for a ${type} position. Return ONLY a JSON array of strings, no other text.`,
+          content: `You are an expert interviewer. Generate ${count} realistic interview questions for a ${type} position.${jdContext} Return ONLY a JSON array of strings, no other text.`,
         },
         {
           role: "user",
