@@ -2,12 +2,19 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 const OpenAI = require("openai");
+const { Server } = require("socket.io");
+const http = require("http");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: "*" },
+});
 
 // Generate interview questions
 app.post("/api/questions", async (req, res) => {
@@ -83,5 +90,38 @@ app.post("/api/analyze", async (req, res) => {
   }
 });
 
+// WebSocket connection handler
+io.on("connection", (socket) => {
+  console.log("User connected:", socket.id);
+
+  // Real-time chat event
+  socket.on("chat-message", async (data) => {
+    const { message } = data;
+    try {
+      const stream = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [{ role: "user", content: message }],
+        stream: true,
+      });
+      for await (const chunk of stream) {
+        const content = chunk.choices[0]?.delta?.content || "";
+        socket.emit("chat-response", { content });
+      }
+      socket.emit("chat-response", { done: true });
+    } catch (err) {
+      socket.emit("error", { message: "Chat failed" });
+    }
+  });
+
+  // Placeholder for voice data (extend as needed)
+  socket.on("voice-data", (audioChunk) => {
+    // Process audio (e.g., transcribe with Whisper)
+    // Emit back transcription or feedback
+    socket.emit("voice-feedback", { transcript: "Transcribed text" });
+  });
+
+  socket.on("disconnect", () => console.log("User disconnected"));
+});
+
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
