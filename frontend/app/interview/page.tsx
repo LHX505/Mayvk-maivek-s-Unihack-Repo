@@ -208,6 +208,8 @@ function InterviewContent() {
   const [loading, setLoading] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [timer, setTimer] = useState(0);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const [recordingStatus, setRecordingStatus] = useState<string>("");
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const [history, setHistory] = useState<
     { question: string; transcript: string; feedback: Feedback }[]
@@ -298,6 +300,9 @@ function InterviewContent() {
         }),
       });
       const data = await res.json();
+      if (!res.ok || !Array.isArray(data.questions)) {
+        throw new Error("Invalid questions response");
+      }
       setQuestions(data.questions);
     } catch {
       setQuestions([
@@ -332,12 +337,41 @@ function InterviewContent() {
     setStep("interview");
   };
 
-  // Speech recognition
+  // Speech recognition with countdown
   const startRecording = () => {
     setTranscript("");
+    setRealTimeFeedback(null);
+    setRecordingStatus("Reading question aloud...");
+
+    // Speak the question first
+    const utterance = new SpeechSynthesisUtterance(questions[currentQ]);
+    utterance.rate = 0.9;
+
+    utterance.onend = () => {
+      // Start countdown after question is read
+      setCountdown(3);
+      setRecordingStatus("Get ready...");
+
+      let count = 3;
+      const countdownInterval = setInterval(() => {
+        count--;
+        if (count > 0) {
+          setCountdown(count);
+        } else {
+          clearInterval(countdownInterval);
+          setCountdown(null);
+          setRecordingStatus("Listening... speak now");
+          beginRecording();
+        }
+      }, 1000);
+    };
+
+    speechSynthesis.speak(utterance);
+  };
+
+  const beginRecording = () => {
     setIsRecording(true);
     setTimer(0);
-    setRealTimeFeedback(null);
 
     timerRef.current = setInterval(() => {
       setTimer((t) => t + 1);
@@ -346,7 +380,8 @@ function InterviewContent() {
     const SpeechRecognition =
       window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      alert("Speech recognition not supported. Please use Chrome.");
+      setRecordingStatus("Speech recognition not supported. Please use Chrome.");
+      setIsRecording(false);
       return;
     }
 
@@ -368,10 +403,14 @@ function InterviewContent() {
         }
       }
       setTranscript(finalTranscript + interim);
+      setRecordingStatus("Listening...");
     };
 
     recognition.onerror = (event) => {
       console.error("Speech error:", event.error);
+      if (event.error === "no-speech") {
+        setRecordingStatus("No speech detected. Try speaking louder.");
+      }
     };
 
     recognition.start();
@@ -386,22 +425,21 @@ function InterviewContent() {
         });
       }
     }, 2000);
-
-    // Speak the question
-    const utterance = new SpeechSynthesisUtterance(questions[currentQ]);
-    utterance.rate = 0.9;
-    speechSynthesis.speak(utterance);
   };
 
   const stopRecording = async () => {
     setIsRecording(false);
+    setRecordingStatus("");
     if (timerRef.current) clearInterval(timerRef.current);
     if (transcriptIntervalRef.current) clearInterval(transcriptIntervalRef.current);
     if (recognitionRef.current) {
       recognitionRef.current.stop();
     }
 
-    if (!transcript.trim()) return;
+    if (!transcript.trim()) {
+      setRecordingStatus("No answer detected. Try again.");
+      return;
+    }
 
     // Analyze answer
     setLoading(true);
@@ -450,6 +488,8 @@ function InterviewContent() {
       setRealTimeFeedback(null);
       setError(null);
       setTimer(0);
+      setCountdown(null);
+      setRecordingStatus("");
       setStep("interview");
     } else {
       // End of interview - show summary
@@ -571,6 +611,14 @@ function InterviewContent() {
                     </span>
                   </div>
                 )}
+                {countdown !== null && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                    <div className="text-center">
+                      <div className="text-7xl font-bold text-white animate-pulse">{countdown}</div>
+                      <p className="text-gray-300 mt-2 text-lg">Get ready to answer...</p>
+                    </div>
+                  </div>
+                )}
                 {!cameraReady && (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <p className="text-gray-500">Starting camera...</p>
@@ -578,26 +626,40 @@ function InterviewContent() {
                 )}
               </div>
 
+              {/* Status message */}
+              {recordingStatus && (
+                <div className="flex justify-center mt-3">
+                  <span className={`text-sm px-4 py-1.5 rounded-full ${
+                    isRecording ? 'bg-red-500/10 text-red-400 border border-red-500/30' :
+                    countdown !== null ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/30' :
+                    'bg-gray-800 text-gray-400 border border-gray-700'
+                  }`}>
+                    {isRecording && <span className="inline-block w-2 h-2 rounded-full bg-red-500 animate-pulse mr-2 align-middle" />}
+                    {recordingStatus}
+                  </span>
+                </div>
+              )}
+
               {/* Record button */}
               <div className="flex justify-center mt-4">
-                {!isRecording ? (
+                {!isRecording && countdown === null ? (
                   <button
                     onClick={startRecording}
-                    disabled={!cameraReady}
-                    className="px-8 py-3 rounded-full bg-red-600 hover:bg-red-700 text-white font-semibold transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                    disabled={!cameraReady || recordingStatus === "Reading question aloud..."}
+                    className="px-8 py-3 rounded-full bg-red-600 hover:bg-red-700 text-white font-semibold transition flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <div className="w-3 h-3 rounded-full bg-white" />
-                    Start Answering
+                    {recordingStatus === "Reading question aloud..." ? "Listening to question..." : "Start Answering"}
                   </button>
-                ) : (
+                ) : isRecording ? (
                   <button
                     onClick={stopRecording}
-                    className="px-8 py-3 rounded-full bg-gray-600 hover:bg-gray-700 text-white font-semibold transition flex items-center gap-2 cursor-pointer"
+                    className="px-8 py-3 rounded-full bg-gray-600 hover:bg-gray-700 text-white font-semibold transition flex items-center gap-2 cursor-pointer animate-pulse"
                   >
                     <div className="w-3 h-3 rounded bg-red-500" />
                     Stop & Get Feedback
                   </button>
-                )}
+                ) : null}
               </div>
             </div>
 
@@ -611,7 +673,9 @@ function InterviewContent() {
                 <div className="text-sm text-gray-300 min-h-[100px] max-h-[150px] overflow-y-auto">
                   {transcript || (
                     <span className="text-gray-600 italic">
-                      Click &quot;Start Answering&quot; and begin speaking...
+                      {isRecording ? "Listening for your voice..." :
+                       countdown !== null ? "Preparing to listen..." :
+                       "Click \"Start Answering\" — the question will be read aloud, then you can respond"}
                     </span>
                   )}
                 </div>
@@ -638,8 +702,9 @@ function InterviewContent() {
 
           {loading ? (
             <div className="text-center py-20">
-              <div className="inline-block w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4" />
-              <p className="text-gray-400">Analyzing your answer...</p>
+              <div className="inline-block w-10 h-10 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4" />
+              <p className="text-gray-300 text-lg font-medium mb-2">AI is analyzing your answer...</p>
+              <p className="text-gray-500 text-sm">Evaluating clarity, confidence, relevance, and more</p>
             </div>
           ) : error ? (
             <div className="text-center py-20">

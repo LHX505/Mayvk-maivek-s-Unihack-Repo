@@ -19,7 +19,7 @@ const sentimentAnalyzer = new Sentiment();
 
 // Kimi API configuration
 const KIMI_API_KEY = process.env.KIMI_API_KEY;
-const KIMI_BASE_URL = "https://api.moonshot.cn/v1";
+const KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 
 // Helper function to call Kimi API
 async function callKimi(messages, temperature = 0.7, maxTokens = 2000) {
@@ -30,9 +30,9 @@ async function callKimi(messages, temperature = 0.7, maxTokens = 2000) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "kimi-k2-5",
+      model: "kimi-k2.5",
       messages,
-      temperature,
+      temperature: 1,
       max_tokens: maxTokens,
     }),
   });
@@ -42,7 +42,10 @@ async function callKimi(messages, temperature = 0.7, maxTokens = 2000) {
   }
 
   const data = await response.json();
-  return data.choices[0].message.content;
+  let content = data.choices[0].message.content || data.choices[0].message.reasoning_content;
+  // Strip markdown code blocks if present
+  content = content.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+  return content;
 }
 
 // Generate interview questions 
