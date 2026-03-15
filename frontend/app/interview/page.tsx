@@ -2,18 +2,59 @@
 
 import { useSearchParams, useRouter } from "next/navigation";
 import { useState, useRef, useEffect, useCallback, Suspense } from "react";
+import { io, Socket } from "socket.io-client";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5002";
 
 interface Feedback {
   clarity: number;
   confidence: number;
   relevance: number;
   overall: number;
+  sentiment_score: number;
   keywords: string[];
   strengths: string[];
   improvements: string[];
   summary: string;
+  sentiment_analysis: {
+    label: string;
+    score: number;
+    emotions: string[];
+  };
+  confidence_breakdown: {
+    level: string;
+    suggestions: string[];
+  };
+}
+
+interface RealTimeFeedback {
+  sentiment: {
+    label: string;
+    score: number;
+  };
+  confidence: {
+    score: number;
+    level: string;
+  };
+  clarity: {
+    score: number;
+  };
+  suggestions: string[];
+}
+
+interface ProgressData {
+  totalQuestions: number;
+  completedQuestions: number;
+  averageScores: {
+    clarity: number;
+    confidence: number;
+    relevance: number;
+    overall: number;
+  };
+  overallProgress: number;
+  trend: string;
+  recommendations: string[];
 }
 
 function ScoreBar({ label, score }: { label: string; score: number }) {
@@ -35,6 +76,115 @@ function ScoreBar({ label, score }: { label: string; score: number }) {
   );
 }
 
+function RealTimeMetrics({ feedback }: { feedback: RealTimeFeedback | null }) {
+  if (!feedback) return null;
+
+  return (
+    <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4 mb-4">
+      <h4 className="text-sm font-semibold text-gray-400 mb-3">Live Metrics</h4>
+      
+      <div className="grid grid-cols-3 gap-3 mb-3">
+        <div className="text-center">
+          <div className={`text-lg font-bold ${
+            feedback.sentiment.score >= 7 ? 'text-green-400' : 
+            feedback.sentiment.score >= 4 ? 'text-yellow-400' : 'text-red-400'
+          }`}>
+            {feedback.sentiment.score.toFixed(1)}
+          </div>
+          <div className="text-xs text-gray-500">Sentiment</div>
+        </div>
+        <div className="text-center">
+          <div className={`text-lg font-bold ${
+            feedback.confidence.score >= 7 ? 'text-green-400' : 
+            feedback.confidence.score >= 4 ? 'text-yellow-400' : 'text-red-400'
+          }`}>
+            {feedback.confidence.score.toFixed(1)}
+          </div>
+          <div className="text-xs text-gray-500">Confidence</div>
+        </div>
+        <div className="text-center">
+          <div className={`text-lg font-bold ${
+            feedback.clarity.score >= 7 ? 'text-green-400' : 
+            feedback.clarity.score >= 4 ? 'text-yellow-400' : 'text-red-400'
+          }`}>
+            {feedback.clarity.score.toFixed(1)}
+          </div>
+          <div className="text-xs text-gray-500">Clarity</div>
+        </div>
+      </div>
+
+      {feedback.suggestions.length > 0 && (
+        <div className="mt-3 pt-3 border-t border-gray-700">
+          <p className="text-xs text-gray-500 mb-2">Suggestions:</p>
+          <ul className="space-y-1">
+            {feedback.suggestions.slice(0, 2).map((s, i) => (
+              <li key={i} className="text-xs text-yellow-400 flex items-start gap-1">
+                <span>💡</span>
+                {s}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProgressPanel({ progress }: { progress: ProgressData | null }) {
+  if (!progress) return null;
+
+  return (
+    <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
+      <h4 className="text-sm font-semibold text-gray-400 mb-3">Session Progress</h4>
+      
+      <div className="mb-4">
+        <div className="flex justify-between text-sm mb-1">
+          <span className="text-gray-400">Questions</span>
+          <span className="text-gray-300">{progress.completedQuestions}/{progress.totalQuestions}</span>
+        </div>
+        <div className="w-full bg-gray-700 rounded-full h-2">
+          <div
+            className="bg-indigo-500 h-2 rounded-full transition-all duration-500"
+            style={{ width: `${progress.overallProgress}%` }}
+          />
+        </div>
+      </div>
+
+      {progress.averageScores && (
+        <div className="space-y-2 mb-4">
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-500">Avg Overall</span>
+            <span className="text-gray-300">{progress.averageScores.overall.toFixed(1)}/10</span>
+          </div>
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-500">Trend</span>
+            <span className={
+              progress.trend === 'improving' ? 'text-green-400' :
+              progress.trend === 'declining' ? 'text-red-400' : 'text-yellow-400'
+            }>
+              {progress.trend}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {progress.recommendations.length > 0 && (
+        <div className="pt-3 border-t border-gray-700">
+          <p className="text-xs text-gray-500 mb-2">Recommendations:</p>
+          <ul className="space-y-1">
+            {progress.recommendations.map((r, i) => (
+              <li key={i} className="text-xs text-gray-400 flex items-start gap-1">
+                <span>→</span>
+                {r}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InterviewContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -46,8 +196,10 @@ function InterviewContent() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const socketRef = useRef<Socket | null>(null);
+  const transcriptIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  const [step, setStep] = useState<"setup" | "interview" | "feedback">("setup");
+  const [step, setStep] = useState<"setup" | "interview" | "feedback" | "summary">("setup");
   const [questions, setQuestions] = useState<string[]>([]);
   const [currentQ, setCurrentQ] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
@@ -60,6 +212,53 @@ function InterviewContent() {
   const [history, setHistory] = useState<
     { question: string; transcript: string; feedback: Feedback }[]
   >([]);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [realTimeFeedback, setRealTimeFeedback] = useState<RealTimeFeedback | null>(null);
+  const [progress, setProgress] = useState<ProgressData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Initialize socket connection
+  useEffect(() => {
+    const socket = io(SOCKET_URL, { reconnectionAttempts: 3 });
+    socketRef.current = socket;
+
+    socket.on("connect", () => {
+      console.log("Connected to server");
+    });
+
+    socket.on("real-time-feedback", (data: RealTimeFeedback) => {
+      setRealTimeFeedback(data);
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
+
+  // Read job description from sessionStorage on mount
+  useEffect(() => {
+    const jd = sessionStorage.getItem("jobDescription") || "";
+    setJobDescription(jd);
+  }, []);
+
+  // Create session on start
+  const createSession = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type, difficulty: "intermediate" }),
+      });
+      const data = await res.json();
+      setSessionId(data.sessionId);
+      
+      if (socketRef.current) {
+        socketRef.current.emit("join-session", data.sessionId);
+      }
+    } catch (err) {
+      console.error("Failed to create session:", err);
+    }
+  };
 
   // Start webcam
   const startCamera = useCallback(async () => {
@@ -79,12 +278,6 @@ function InterviewContent() {
     }
   }, []);
 
-  // Read job description from sessionStorage on mount
-  useEffect(() => {
-    const jd = sessionStorage.getItem("jobDescription") || "";
-    setJobDescription(jd);
-  }, []);
-
   // Fetch questions from backend
   const fetchQuestions = useCallback(async () => {
     setLoading(true);
@@ -101,7 +294,6 @@ function InterviewContent() {
       const data = await res.json();
       setQuestions(data.questions);
     } catch {
-      // Fallback questions if backend is not running
       setQuestions([
         "Tell me about yourself.",
         "What is your greatest strength?",
@@ -113,8 +305,22 @@ function InterviewContent() {
     setLoading(false);
   }, [typeLabel, jobDescription]);
 
+  // Fetch progress
+  const fetchProgress = useCallback(async () => {
+    if (!sessionId) return;
+    
+    try {
+      const res = await fetch(`${API_URL}/api/progress/${sessionId}`);
+      const data = await res.json();
+      setProgress(data);
+    } catch (err) {
+      console.error("Failed to fetch progress:", err);
+    }
+  }, [sessionId]);
+
   // Start interview
   const handleStartInterview = async () => {
+    await createSession();
     await startCamera();
     await fetchQuestions();
     setStep("interview");
@@ -125,6 +331,7 @@ function InterviewContent() {
     setTranscript("");
     setIsRecording(true);
     setTimer(0);
+    setRealTimeFeedback(null);
 
     timerRef.current = setInterval(() => {
       setTimer((t) => t + 1);
@@ -164,6 +371,16 @@ function InterviewContent() {
     recognition.start();
     recognitionRef.current = recognition;
 
+    // Start real-time analysis
+    transcriptIntervalRef.current = setInterval(() => {
+      if (socketRef.current && finalTranscript.trim().length > 10) {
+        socketRef.current.emit("analyze-stream", {
+          text: finalTranscript,
+          questionIndex: currentQ,
+        });
+      }
+    }, 2000);
+
     // Speak the question
     const utterance = new SpeechSynthesisUtterance(questions[currentQ]);
     utterance.rate = 0.9;
@@ -173,6 +390,7 @@ function InterviewContent() {
   const stopRecording = async () => {
     setIsRecording(false);
     if (timerRef.current) clearInterval(timerRef.current);
+    if (transcriptIntervalRef.current) clearInterval(transcriptIntervalRef.current);
     if (recognitionRef.current) {
       recognitionRef.current.stop();
     }
@@ -188,9 +406,16 @@ function InterviewContent() {
         body: JSON.stringify({
           question: questions[currentQ],
           transcript: transcript.trim(),
+          sessionId,
         }),
       });
+      if (!res.ok) {
+        throw new Error(`Server error: ${res.status}`);
+      }
       const data = await res.json();
+      if (!data.feedback) {
+        throw new Error("No feedback returned from server");
+      }
       setFeedback(data.feedback);
       setHistory((prev) => [
         ...prev,
@@ -200,22 +425,12 @@ function InterviewContent() {
           feedback: data.feedback,
         },
       ]);
-    } catch {
-      // Fallback feedback
-      setFeedback({
-        clarity: 7,
-        confidence: 6,
-        relevance: 7,
-        overall: 7,
-        keywords: ["communication", "teamwork"],
-        strengths: ["Good structure", "Clear delivery"],
-        improvements: [
-          "Add specific examples",
-          "Use the STAR method for behavioral questions",
-        ],
-        summary:
-          "Solid answer! Try to include more specific examples and measurable results to strengthen your response.",
-      });
+
+      // Fetch updated progress
+      await fetchProgress();
+    } catch (err) {
+      console.error("Analysis error:", err);
+      setError("Failed to analyze your answer. Please check your connection and try again.");
     }
     setLoading(false);
     setStep("feedback");
@@ -226,15 +441,21 @@ function InterviewContent() {
       setCurrentQ((q) => q + 1);
       setTranscript("");
       setFeedback(null);
+      setRealTimeFeedback(null);
+      setError(null);
       setTimer(0);
       setStep("interview");
     } else {
-      // End of interview
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-      }
-      router.push("/");
+      // End of interview - show summary
+      setStep("summary");
     }
+  };
+
+  const finishInterview = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+    }
+    router.push("/");
   };
 
   // Attach stream to video element when interview screen renders
@@ -251,6 +472,7 @@ function InterviewContent() {
         streamRef.current.getTracks().forEach((t) => t.stop());
       }
       if (timerRef.current) clearInterval(timerRef.current);
+      if (transcriptIntervalRef.current) clearInterval(transcriptIntervalRef.current);
       if (recognitionRef.current) recognitionRef.current.stop();
     };
   }, []);
@@ -261,7 +483,7 @@ function InterviewContent() {
   // SETUP SCREEN
   if (step === "setup") {
     return (
-      <main className="min-h-screen flex flex-col items-center justify-center px-6">
+      <main className="min-h-screen flex flex-col items-center justify-center px-6 gradient-bg">
         <div className="max-w-lg w-full text-center">
           <h1 className="text-3xl font-bold mb-2 capitalize">{typeLabel}</h1>
           <p className="text-gray-400 mb-8">
@@ -275,8 +497,9 @@ function InterviewContent() {
             <ol className="space-y-2 text-gray-300 text-sm">
               <li>1. AI reads you a question</li>
               <li>2. You answer on camera (speech is transcribed live)</li>
-              <li>3. AI analyzes your answer and gives feedback</li>
-              <li>4. Review scores and move to the next question</li>
+              <li>3. Get real-time feedback on sentiment & confidence</li>
+              <li>4. AI analyzes your answer and gives detailed feedback</li>
+              <li>5. Track your progress across all questions</li>
             </ol>
           </div>
 
@@ -289,7 +512,7 @@ function InterviewContent() {
             </button>
             <button
               onClick={handleStartInterview}
-              className="px-6 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition cursor-pointer"
+              className="px-6 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold transition cursor-pointer"
             >
               {loading ? "Preparing..." : "Begin Interview"}
             </button>
@@ -302,8 +525,8 @@ function InterviewContent() {
   // INTERVIEW SCREEN
   if (step === "interview") {
     return (
-      <main className="min-h-screen flex flex-col items-center px-6 py-8">
-        <div className="max-w-4xl w-full">
+      <main className="min-h-screen flex flex-col items-center px-6 py-8 gradient-bg">
+        <div className="max-w-5xl w-full">
           {/* Header */}
           <div className="flex justify-between items-center mb-6">
             <span className="text-sm text-gray-400 capitalize">
@@ -315,8 +538,8 @@ function InterviewContent() {
           </div>
 
           {/* Question */}
-          <div className="bg-blue-600/10 border border-blue-500/30 rounded-xl p-5 mb-6">
-            <p className="text-sm text-blue-400 mb-1">Question:</p>
+          <div className="bg-indigo-600/10 border border-indigo-500/30 rounded-xl p-5 mb-6">
+            <p className="text-sm text-indigo-400 mb-1">Question:</p>
             <p className="text-xl font-semibold">
               {questions[currentQ] || "Loading..."}
             </p>
@@ -372,18 +595,27 @@ function InterviewContent() {
               </div>
             </div>
 
-            {/* Live transcript */}
-            <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
-              <h3 className="text-sm font-semibold text-gray-400 mb-3">
-                Live Transcript
-              </h3>
-              <div className="text-sm text-gray-300 min-h-[200px]">
-                {transcript || (
-                  <span className="text-gray-600 italic">
-                    Click &quot;Start Answering&quot; and begin speaking...
-                  </span>
-                )}
+            {/* Side panel */}
+            <div className="space-y-4">
+              {/* Live transcript */}
+              <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
+                <h3 className="text-sm font-semibold text-gray-400 mb-3">
+                  Live Transcript
+                </h3>
+                <div className="text-sm text-gray-300 min-h-[100px] max-h-[150px] overflow-y-auto">
+                  {transcript || (
+                    <span className="text-gray-600 italic">
+                      Click &quot;Start Answering&quot; and begin speaking...
+                    </span>
+                  )}
+                </div>
               </div>
+
+              {/* Real-time metrics */}
+              {isRecording && <RealTimeMetrics feedback={realTimeFeedback} />}
+
+              {/* Progress */}
+              <ProgressPanel progress={progress} />
             </div>
           </div>
         </div>
@@ -394,14 +626,32 @@ function InterviewContent() {
   // FEEDBACK SCREEN
   if (step === "feedback") {
     return (
-      <main className="min-h-screen flex flex-col items-center px-6 py-8">
+      <main className="min-h-screen flex flex-col items-center px-6 py-8 gradient-bg">
         <div className="max-w-4xl w-full">
           <h2 className="text-2xl font-bold mb-6">Feedback</h2>
 
           {loading ? (
             <div className="text-center py-20">
-              <div className="inline-block w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" />
+              <div className="inline-block w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4" />
               <p className="text-gray-400">Analyzing your answer...</p>
+            </div>
+          ) : error ? (
+            <div className="text-center py-20">
+              <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-8 max-w-md mx-auto">
+                <p className="text-red-400 mb-4">{error}</p>
+                <button
+                  onClick={() => { setError(null); setStep("interview"); }}
+                  className="px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition mr-3"
+                >
+                  Try Again
+                </button>
+                <button
+                  onClick={nextQuestion}
+                  className="px-6 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition"
+                >
+                  Skip to Next
+                </button>
+              </div>
             </div>
           ) : feedback ? (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -412,6 +662,7 @@ function InterviewContent() {
                 <ScoreBar label="Confidence" score={feedback.confidence} />
                 <ScoreBar label="Relevance" score={feedback.relevance} />
                 <ScoreBar label="Overall" score={feedback.overall} />
+                <ScoreBar label="Sentiment" score={feedback.sentiment_score} />
 
                 <div className="mt-4">
                   <p className="text-sm text-gray-400 mb-2">Keywords used:</p>
@@ -419,13 +670,29 @@ function InterviewContent() {
                     {feedback.keywords.map((kw, i) => (
                       <span
                         key={i}
-                        className="px-2 py-1 bg-blue-500/20 text-blue-300 rounded text-xs"
+                        className="px-2 py-1 bg-indigo-500/20 text-indigo-300 rounded text-xs"
                       >
                         {kw}
                       </span>
                     ))}
                   </div>
                 </div>
+
+                {feedback.sentiment_analysis && (
+                  <div className="mt-4 pt-4 border-t border-gray-700">
+                    <p className="text-sm text-gray-400 mb-1">Sentiment: 
+                      <span className={
+                        feedback.sentiment_analysis.label === 'positive' ? 'text-green-400' :
+                        feedback.sentiment_analysis.label === 'negative' ? 'text-red-400' : 'text-yellow-400'
+                      }>
+                        {' '}{feedback.sentiment_analysis.label}
+                      </span>
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      Emotions: {feedback.sentiment_analysis.emotions.join(", ")}
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Feedback details */}
@@ -450,13 +717,13 @@ function InterviewContent() {
                   <ul className="space-y-1">
                     {feedback.improvements.map((s, i) => (
                       <li key={i} className="text-sm text-gray-300">
-                        - {s}
+                        → {s}
                       </li>
                     ))}
                   </ul>
                 </div>
 
-                <div className="bg-blue-600/10 border border-blue-500/30 rounded-xl p-6">
+                <div className="bg-indigo-600/10 border border-indigo-500/30 rounded-xl p-6">
                   <h3 className="font-semibold mb-2">Summary</h3>
                   <p className="text-sm text-gray-300">{feedback.summary}</p>
                 </div>
@@ -474,11 +741,103 @@ function InterviewContent() {
           <div className="flex justify-center mt-8">
             <button
               onClick={nextQuestion}
-              className="px-8 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition cursor-pointer"
+              className="px-8 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold transition cursor-pointer"
             >
               {currentQ < questions.length - 1
                 ? "Next Question"
-                : "Finish Interview"}
+                : "View Summary"}
+            </button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  // SUMMARY SCREEN
+  if (step === "summary") {
+    const overallStats = history.length > 0 ? {
+      avgClarity: history.reduce((sum, h) => sum + h.feedback.clarity, 0) / history.length,
+      avgConfidence: history.reduce((sum, h) => sum + h.feedback.confidence, 0) / history.length,
+      avgRelevance: history.reduce((sum, h) => sum + h.feedback.relevance, 0) / history.length,
+      avgOverall: history.reduce((sum, h) => sum + h.feedback.overall, 0) / history.length,
+    } : null;
+
+    return (
+      <main className="min-h-screen flex flex-col items-center px-6 py-8 gradient-bg">
+        <div className="max-w-4xl w-full">
+          <h2 className="text-3xl font-bold mb-2 text-center">Interview Complete! 🎉</h2>
+          <p className="text-gray-400 text-center mb-8">Here&apos;s how you performed</p>
+
+          {overallStats && (
+            <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-6 mb-6">
+              <h3 className="font-semibold mb-4 text-center">Overall Performance</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="text-center p-4 bg-gray-700/50 rounded-lg">
+                  <div className="text-2xl font-bold text-indigo-400">
+                    {overallStats.avgOverall.toFixed(1)}
+                  </div>
+                  <div className="text-xs text-gray-500">Overall</div>
+                </div>
+                <div className="text-center p-4 bg-gray-700/50 rounded-lg">
+                  <div className="text-2xl font-bold text-blue-400">
+                    {overallStats.avgClarity.toFixed(1)}
+                  </div>
+                  <div className="text-xs text-gray-500">Clarity</div>
+                </div>
+                <div className="text-center p-4 bg-gray-700/50 rounded-lg">
+                  <div className="text-2xl font-bold text-green-400">
+                    {overallStats.avgConfidence.toFixed(1)}
+                  </div>
+                  <div className="text-xs text-gray-500">Confidence</div>
+                </div>
+                <div className="text-center p-4 bg-gray-700/50 rounded-lg">
+                  <div className="text-2xl font-bold text-purple-400">
+                    {overallStats.avgRelevance.toFixed(1)}
+                  </div>
+                  <div className="text-xs text-gray-500">Relevance</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Question breakdown */}
+          <div className="space-y-4 mb-8">
+            <h3 className="font-semibold">Question Breakdown</h3>
+            {history.map((h, i) => (
+              <div key={i} className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
+                <div className="flex justify-between items-start mb-2">
+                  <p className="text-sm font-medium text-gray-300">Q{i + 1}: {h.question}</p>
+                  <span className="text-sm font-bold text-indigo-400">{h.feedback.overall}/10</span>
+                </div>
+                <p className="text-xs text-gray-500 mb-2">{h.feedback.summary}</p>
+                <div className="flex gap-2 text-xs">
+                  <span className="px-2 py-1 bg-blue-500/20 text-blue-300 rounded">
+                    Clarity: {h.feedback.clarity}
+                  </span>
+                  <span className="px-2 py-1 bg-green-500/20 text-green-300 rounded">
+                    Confidence: {h.feedback.confidence}
+                  </span>
+                  <span className="px-2 py-1 bg-purple-500/20 text-purple-300 rounded">
+                    Relevance: {h.feedback.relevance}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex justify-center gap-4">
+            <button
+              onClick={() => router.push("/setup")}
+              className="px-6 py-3 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-800 transition cursor-pointer"
+            >
+              Practice Again
+            </button>
+            <button
+              onClick={finishInterview}
+              className="px-6 py-3 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold transition cursor-pointer"
+            >
+              Finish
             </button>
           </div>
         </div>
@@ -493,7 +852,7 @@ export default function InterviewPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen flex items-center justify-center">
+        <div className="min-h-screen flex items-center justify-center gradient-bg">
           Loading...
         </div>
       }
