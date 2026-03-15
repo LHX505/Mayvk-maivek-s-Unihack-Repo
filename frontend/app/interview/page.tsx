@@ -5,7 +5,7 @@ import { useState, useRef, useEffect, useCallback, Suspense } from "react";
 import { io, Socket } from "socket.io-client";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
-const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:5002";
+const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "";
 
 interface Feedback {
   clarity: number;
