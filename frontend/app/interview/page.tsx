@@ -217,22 +217,28 @@ function InterviewContent() {
   const [progress, setProgress] = useState<ProgressData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Initialize socket connection
+  // Initialize socket connection (only if SOCKET_URL is configured)
   useEffect(() => {
-    const socket = io(SOCKET_URL, { reconnectionAttempts: 3 });
-    socketRef.current = socket;
+    if (!SOCKET_URL) return;
 
-    socket.on("connect", () => {
-      console.log("Connected to server");
-    });
+    try {
+      const socket = io(SOCKET_URL, { reconnectionAttempts: 3 });
+      socketRef.current = socket;
 
-    socket.on("real-time-feedback", (data: RealTimeFeedback) => {
-      setRealTimeFeedback(data);
-    });
+      socket.on("connect", () => {
+        console.log("Connected to server");
+      });
 
-    return () => {
-      socket.disconnect();
-    };
+      socket.on("real-time-feedback", (data: RealTimeFeedback) => {
+        setRealTimeFeedback(data);
+      });
+
+      return () => {
+        socket.disconnect();
+      };
+    } catch {
+      console.warn("Socket.IO connection skipped");
+    }
   }, []);
 
   // Read job description from sessionStorage on mount
